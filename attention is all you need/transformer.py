@@ -100,35 +100,94 @@ class MultiHeadAttention(nn.Module):
                 mask: Tensor = None
                 ):
         b = Q.size(0)
+        Q = self.W_Q(Q).view(b,-1,self.head,self.dim_k).transpose(1,2)
+        K = self.W_K(K).view(b,-1,self.head,self.dim_k).transpose(1,2)
+        V = self.W_V(V).view(b,-1,self.head,self.dim_k).transpose(1,2)
+        x, _ =self.attention(Q,K,V,mask=mask,dropout=self.dropout)
 
-class Transformer(nn.Moudule):
-    def __init__(self,
-                 head:int,
-                 dim:int,
-                 layer:int,
-                 dropout:float=0.1):
+
+        #concat heads
+        # transpose: (b * h * n * d) -> (b * n * h * d)
+        # contiguous : reorder
+        # view: (b * n * h * d) -> (b * n * d)
+        x = x.transpose(1,2).contiguous().view(b,-1,self.dim)
+
+        x = self.W_M(x)
+
+        return x
+
+class SublayerConnection(nn.Module):
+    def __init__(self,dim:int= 256,dropout_porb:float= 0.1) :
         super().__init__()
 
         #parameters
-        self.head = head
         self.dim = dim
-        self.layer = layer
-        self.dropout = dropout
-
-        self.dim_K = dim//head
+        self.dropout_porb = dropout_porb
 
         #layers
-        self.W_Q = nn.Linear(dim,dim)
-        self.W_K = nn.Linear(dim,dim)
-        self.W_V = nn.Linear(dim,dim)
-        self.W_M = nn.Linear(dim,dim)
-        self.attention = Attention()
-        self.dropout = nn.Dropout(p=dropout)
+        self.norm = LayerNorm(dim)
+        self.dropout = nn.Dropout(p=dropout_porb)
 
-    def forward(self,
-                Q:Tensor,
-                K:Tensor,
-                V:Tensor,
-                maaks:Tensor = None):
+    def forward(self,x:Tensor,sublayer:Module):
+        residual = self.layer_norm(x)
+        residual =sublayer(residual)
+        residual = self.dropout(residual)
+        return x + residual
+
+class PositionWiseFeedForward(nn.Module):
+    def __init__(self,
+                dim_model:int = 256,
+                dim_ff:int = 2048,
+                dropout_prob:float = 0.1):
+        super().__init__()
+            
+        #parameters
+        self.dim_model = dim_model
+        self.dim_ff = dim_ff
+        self.dropout_prob = dropout_prob
+
+        #layers
+        self.W_1 = nn.Linear(dim_model,dim_ff)
+        self.W_2 = nn.Linear(dim_ff,dim_model)
+        self.dropout = nn.Dropout(p=dropout_prob)
+        self.gelu = GELU()
+
+    def forward(self,x:Tensor):
+        x = self.W_1(x)
+        x = self.gelu(x)
+        x = self.dropout(x)
+        x = self.W_2(x)
+
+        return x
+
+class Transformer(nn.Moudule):
+    def __init__(self,
+                dim_model:int = 256,
+                dim_ff:int = 2048,
+                head:int = 8,
+                num_layer:int = 6,
+                dropout_prob:float = 0.1):
+        super().__init__()
+
+        #parameters
+        self.dim_model = dim_model
+        self.dim_ff = dim_ff
+        self.head = head
+        self.num_layer = num_layer
+        self.dropout_prob = dropout_prob
+
+        #layers
+        self.attention = MultiHeadAttention(head,dim_model,dropout=dropout_prob)
+        self.attention_sublayer = SublayerConnection(dim_model,dropout_prob)
+        self.pointwise_feed_forward = PositionWiseFeedForward(dim_model,dim_ff,dropout_prob)
+        self.pointwise_feed_forward_sublayer = SublayerConnection(dim_model,dropout_prob)
+        self.dropout = nn.Dropout(p=dropout_prob)
+
+    def forward(self,x:Tensor, mask:Tensor=None):
         
-        Q
+
+        x = self.attention_sublayer(x, lambda f : self.attention(f,f,f,mask = mask))
+        x = self.pointwise_feed_forward_sublayer(x,lambda f : self.pointwise_feed_forward(f))
+        x = self.dropout(x)
+
+        return x
